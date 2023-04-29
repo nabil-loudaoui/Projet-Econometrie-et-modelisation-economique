@@ -1,0 +1,577 @@
+---
+title: "Untitled"
+author: "Yann & Nabil"
+date: "25/11/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Packages et Librairies
+```{r}
+#install.packages("corrgram")
+#install.packages("cowplot")
+#install.packages("sf")
+#install.packages("stargazer")
+#install.packages("orcutt")
+#install.packages("remotes")
+#install.packages("rnaturalearthdata")
+library(remotes)
+remotes::install_github("ropensci/rnaturalearthhires")
+library(orcutt)
+library(cowplot)
+library(AER)
+library(sf)
+library(lmtest)
+library(ggplot2)
+library(corrgram)
+library(corrplot)
+library(tidyverse)
+library(dplyr)
+library(hrbrthemes)
+library(stargazer)
+library(rnaturalearth)
+library(sp)
+```
+
+```{r}
+getwd()
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+```
+
+# Chargement des données
+```{r}
+delit <- read.csv("delit.csv",sep = ";", header=TRUE, dec = ",", , row.names = 1, fileEncoding = "latin1")
+View(delit)
+sum(is.na.data.frame(delit)) 
+```
+Avant de commencer l'étude de notre jeu de données nous vérifions que ce dernier ne contient aucune valeurs manquantes.
+
+# Ajustement
+```{r}
+# Modification unité de la variable Population (en millier d'habitant)
+delit$Population = delit$Population/1000
+```
+
+
+***Partie 1***
+
+### Visualisation du phénomène à expliquer (Cartographie)
+```{r}
+# Shapefile de la France et ses frontières départementales
+sp::plot(ne_states(geounit = 'france'))
+
+# Récupération des informations du shapefile des départements français
+france <- ne_states(geounit = 'france',returnclass = "sf")
+
+# Trie par ordre croissant des départements selon leurs noms dans "france"
+france_order <- france[order(france$name_fr),]
+
+# Import de notre jeu de données sans mettre la colonne des départements en attribut de ligne (sans row.names)
+delit2 <- read.csv("delits.csv",sep = ";", header=TRUE, dec = ",", fileEncoding = "latin1")
+
+# Trie par ordre croissant des départements selon leurs noms dans "delits2"
+delit2 <- delit2[order(delit2$Département),]
+
+# Jointure entre les deux dataframes
+france_delit <- cbind(france_order,delit2)
+
+# Visualisation
+ggplot(data = france_delit)+
+geom_sf(aes(fill=Delit))+
+scale_fill_viridis_c(option = "plasma", trans ="sqrt")+theme_void()+
+ggtitle("Taux de délit en France métropolitaine en 2018")
+
+
+```
+
+
+# Variable indicatrice
+```{r cars}
+# Indicatrice en facteur
+delit$Politique <- ifelse(delit$Politique == 'gauche', 0, 1)
+delit$Politique <- as.factor(delit$Politique)
+
+```
+"gauche" ==> 0 & "droite" ==> 1
+
+
+# Statistique descriptive univarié
+```{r}
+# Résumé statistique
+summary(delit)
+```
+
+
+# Boxplots des variables exogènes
+```{r}
+# Variable endogène
+boxplot(Delit~Politique, data=delit, main="Politique (0=gauche, 1=droite)", ylab="", xlab="")
+
+# Variables exogènes
+par(mfrow=c(1,5))
+boxplot(delit$Population, xlab="Population")
+boxplot(delit$Immigration, xlab="Immigration")
+boxplot(delit$Revenu_median, xlab="Revenu_med")
+boxplot(delit$Police, xlab="Police")
+boxplot(delit$Taux_chomage, xlab="Chomage")
+
+par(mfrow=c(1,4))
+boxplot(delit$Urbanisation, xlab="Urbanisation")
+boxplot(delit$Scolarisation, xlab="Scolarisation")
+boxplot(delit$Densite_pop, xlab="Densite_pop")
+boxplot(delit$Taux_pauvrete, xlab="Taux_pauvrete")
+
+# Détermination des individus des atypiques
+## Pour la variable Delit 
+vec = which(delit$Delit > quantile(delit$Delit, 0.75) + 1.5 * IQR(delit$Delit) | delit$Delit < quantile(delit$Delit, 0.25) - 1.5 * IQR(delit$Delit))
+row.names(delit[vec,])
+
+
+```
+
+# Algorithme de selection de modele 
+```{r}
+### Modèle test
+test_modele <- lm(Delit ~ .,data=delit)
+summary(test_modele)
+AIC(test_modele)
+
+### Backward
+step(test_modele, direction = "backward")
+
+### Forward
+step(lm(Delit~1,data= delit), direction = "forward", scope = formula(test_modele))
+
+### Stepwise
+step(lm(Delit~1,data= delit), direction = "both", scope = formula(test_modele))
+
+```
+Modèle de test (Resultats): AIC = 228.5245 | Variables significatives: Immigration, Population, Scolarisation, Taux_pauvrete
+
+Backward (Resultats): Delit ~ Immigration + Population + Scolarisation + Taux_pauvrete + Revenu_median
+
+Forward (Resultats): Delit ~ Immigration + Population + Scolarisation + Densite_pop + Taux_pauvrete + Revenu_median + Taux_chomage 
+
+Stepwise (Resultats): Delit ~ Immigration + Population + Scolarisation + Taux_pauvrete + Revenu_median
+
+Conclusion: Ces résultats seront précieux en vue du choix des variables qui composeront le modèle prédictif final.
+
+
+# Statistique descriptive bivarié
+```{r}
+# Boxplot des âges (part des 15-19ans et part des 60-74ans)
+boxplot(delit$X15.29ans,delit$X60.74ans, las=1, names = c("15-29 ans", "60-74 ans" ), col = c("blue", "green"))
+
+# Boxplot de la politique en fonction de l'indicatrice
+boxplot(Delit~Politique,data=delit, main="Politique (0=Gauche, 1=Droite)", ylab="", xlab="")
+
+```
+
+### Corrélation
+```{r}
+# Matrice de corrélation
+stargazer(cor(delit[1:12]), type="text",title="Matrice de corrélation",single.row=FALSE, digits=3)
+
+# Corrélogramme 
+ggcorr(delit, method = c("everything", "pearson"),low = "#F21A00",mid = "#EEEEEE",high = "#3B9AB2", hjust=0.8, nbreaks = 8, label = TRUE, label_round = 1)
+```
+Au regard des résultats précédent, nous conserverons les variables suivantes:
+Immigration + Population + Scolarisation + Taux_pauvrete
+
+
+
+# Analyse et interprétation des variables du modèle
+
+```{r}
+### Immigration en fonction de Delit
+
+# Modèle niveau-niveau
+immigration_niv_niv <- ggplot(delit,aes(x=Immigration,y=Delit))+
+  geom_point()+
+  geom_smooth(method = 'lm',color='red')+
+  ggtitle(" Modèle niveau-niveau")
+
+# Modèle niveau-log
+immigration_niv_log <- ggplot(delit,aes(x=log(Immigration),y=Delit))+
+  geom_point()+
+  geom_smooth(method = 'lm',color='red')+
+  ggtitle(" Modèle niveau-log")
+
+# Modèle log-log
+immigration_log_log <- ggplot(delit,aes(x=log(Immigration),y=log(Delit)))+
+  geom_point()+
+  geom_smooth(method = 'lm',color='red')+
+  ggtitle(" Modèle log-log")
+
+# Modèle log-niveau
+immigration_log_niv <- ggplot(delit,aes(x=Immigration,y=log(Delit)))+
+  geom_point()+
+  geom_smooth(method = 'lm',color='red')+
+  ggtitle(" Modèle log-niveau")
+
+plot_grid(immigration_niv_niv,immigration_niv_log,immigration_log_log,immigration_log_niv, labels=c("1", "2","3","4"), ncol = 2, nrow = 2)
+```
+
+
+
+```{r}
+### Population en fonction de Delit
+
+# Modèle niveau-niveau
+population_niv_niv <- ggplot(delit,aes(x=Population,y=Delit))+
+  geom_point()+
+  geom_smooth(method = 'lm',color='red')+
+  ggtitle(" Modèle niveau-niveau")
+
+# Modèle niveau-log
+population_niv_log <- ggplot(delit,aes(x=log(Population),y=Delit))+
+  geom_point()+
+  geom_smooth(method = 'lm',color='red')+
+  ggtitle(" Modèle niveau-log")
+
+# Modèle log-log
+population_log_log <- ggplot(delit,aes(x=log(Population),y=log(Delit)))+
+  geom_point()+
+  geom_smooth(method = 'lm',color='red')+
+  ggtitle(" Modèle log-log")
+
+# Modèle log-niveau
+population_log_niv <- ggplot(delit,aes(x=Population,y=log(Delit)))+
+  geom_point()+
+  geom_smooth(method = 'lm',color='red')+
+  ggtitle(" Modèle log-niveau")
+
+plot_grid(population_niv_niv,population_niv_log,population_log_log,population_log_niv, labels=c("1", "2","3","4"), ncol = 2, nrow = 2)
+```
+
+
+```{r}
+### Scolarisation en fonction de Delit
+
+# Modèle niveau-niveau
+scolarisation_niv_niv <- ggplot(delit,aes(x=Scolarisation,y=Delit))+
+  geom_point()+
+  geom_smooth(method = 'lm',color='red')+
+  ggtitle(" Modèle niveau-niveau")
+
+# Modèle niveau-log
+scolarisation_niv_log <- ggplot(delit,aes(x=log(Scolarisation),y=Delit))+
+  geom_point()+
+  geom_smooth(method = 'lm',color='red')+
+  ggtitle(" Modèle niveau-log")
+
+# Modèle log-log
+scolarisation_log_log <- ggplot(delit,aes(x=log(Scolarisation),y=log(Delit)))+
+  geom_point()+
+  geom_smooth(method = 'lm',color='red')+
+  ggtitle(" Modèle log-log")
+
+# Modèle log-niveau
+scolarisation_log_niv <- ggplot(delit,aes(x=Scolarisation,y=log(Delit)))+
+  geom_point()+
+  geom_smooth(method = 'lm',color='red')+
+  ggtitle(" Modèle log-niveau")
+
+plot_grid(scolarisation_niv_niv,scolarisation_niv_log,scolarisation_log_log,scolarisation_log_niv, labels=c("1", "2","3","4"), ncol = 2, nrow = 2)
+```
+
+
+```{r}
+### Taux_pauvrete en fonction de Delit
+
+# Modèle niveau-niveau
+pauvrete_niv_niv <- ggplot(delit,aes(x=Taux_pauvrete,y=Delit))+
+  geom_point()+
+  geom_smooth(method = 'lm',color='red')+
+  ggtitle(" Modèle niveau-niveau")
+
+# Modèle niveau-log
+pauvrete_niv_log <- ggplot(delit,aes(x=log(Taux_pauvrete),y=Delit))+
+  geom_point()+
+  geom_smooth(method = 'lm',color='red')+
+  ggtitle(" Modèle niveau-log")
+
+# Modèle log-log
+pauvrete_log_log <- ggplot(delit,aes(x=log(Taux_pauvrete),y=log(Delit)))+
+  geom_point()+
+  geom_smooth(method = 'lm',color='red')+
+  ggtitle(" Modèle log-log")
+
+# Modèle log-niveau
+pauvrete_log_niv <- ggplot(delit,aes(x=Taux_pauvrete,y=log(Delit)))+
+  geom_point()+
+  geom_smooth(method = 'lm',color='red')+
+  ggtitle(" Modèle log-niveau")
+
+plot_grid(pauvrete_niv_niv,pauvrete_niv_log,pauvrete_log_log,pauvrete_log_niv, labels=c("1", "2","3","4"), ncol = 2, nrow = 2)
+```
+
+Conclusion: On remarque que pour chacune de ses variables explicatives, les modèles niveau-log et log-log pourrait améliorer la qualité de nos estimations.
+
+
+***Partie 2***
+
+# Choix meilleur modèle
+Pour chacun des modèles évoqués ci-dessus, nous porterons un regard sur la qualité de l'ajustement, les variables significatives et si le modèle est globalement satisfaisant.
+Nous avons retirer la variable taux_pauvrete car elle n'est plus significative à l'ajout de logarithme dans l'équation.
+
+
+**Modèle niveau-niveau**
+```{r}
+modele_nn <- lm(Delit~log(Population)+log(Immigration)+Scolarisation,data=delit)
+stargazer(modele_nn, type="text", title="Modèle niveau-niveau (Estimation)")
+
+```
+
+### Qualité d'ajustement ###
+Nous avons un R2 ajusté de 0.7, c'est à dire que 70% de la variance de la variable Delit est expliqué par le modèle, autrement dit par les variables 
+log(Population),log(Immigration), Scolarisation et Taux_pauvrete. Le modèle est donc relativement en adéquation avec la variable endogène.
+
+### Modèle globalement satisfaisant ###
+On suppose l'hypothèse nulle H0 tel que:
+"Tous les coefficients sont nuls sauf la constante".
+La p-value est strictement inférieur à 2.2e-16 donc bien inférieur au seuil de 5% alors le modèle est globalement satisfaisant.
+
+### Significativité des variables ###
+On test individuellement sur chaque variable explicative de significativité : H0 : "coefficient 
+de la variable est égale à 0". 
+Les variables log(Population),log(Immigration) et Scolarisation ont une p-value inférieure à 5% donc 
+ces variables ont un effet significatif sur le phénomène qu'on explique Y (Delit).
+Seule la variable Taux_pauvrete a une p-value inférieure au seuil de 5% du modèle. Elle n'apporte pas une plus value dans notre modèle dans l'explication de la variable Delit.
+
+### Interprétation des variables ###
+- Si la variable log(Population) augmente d'une unité alors la variable Y (Delit) varie de 0.73857 habitants en milliers dans le département.
+- Si la variable log(Immigration) augmente d'une unité alors la variable Y (Delit) varie  de 1.29824 %.
+- Pour toutes variations (positive ou négativement) d'un point de pourcentage de la variable Scolarisation, la variable Delit va varier respectivement (positivement ou négativement) de 0.09526%.
+
+
+
+
+**Modèle niveau-log**
+```{r}
+modele_nl <- lm(Delit~log(Population)+log(Immigration)+log(Scolarisation),data=delit)
+stargazer(modele_nl, type="text", title="Modèle niveau-log (Estimation)")
+```
+
+### Qualité d'ajustement ###
+Nous avons un R2 ajusté de 0.704, c'est à dire que 70,4% de la variance de la variable Delit est expliqué par le modèle, autrement dit par les variables log(Population),log(Immigration), log(Scolarisation) et log(Taux_pauvrete). Le modèle est donc relativement en adéquation avec la variable Y.
+
+### Modèle globalement satisfaisant ###
+On suppose l'hypothèse nulle H0 tel que:
+"Tous les coefficients sont nuls sauf la constante".
+La p-value est strictement inférieur à 2.2e-16 donc bien inférieur au seuil de 5% alors le modèle est globalement satisfaisant.
+
+### Significativité des variables ###
+On test individuellement sur chaque variable explicative de significativité : H0 : "coefficient 
+de la variable est égale à 0". 
+Les variables log(Population),log(Immigration) et log(Scolarisation) ont une p-value inférieure à 5% donc 
+ces variables ont un effet significatif sur le phénomène qu'on explique Y (Delit).
+Seule la variable log(Taux_pauvrete) a une p-value inférieure au seuil de 5% du modèle. Elle n'apporte pas une plus value dans notre modèle dans l'explication de la variable Delit.
+
+### Interprétation des variables ###
+- Si la varibale log(Population) augmente de 1% alors le taux de delit augmente de (0.7457/100) %. (Soit 0.007457%).
+- Si la varibale log(Immigration) augmente de 1% alors
+le taux de delit augmente de (1.2902/100) %. (Soit 0.012902%).
+- Si la varibale log(Scolarisation) augmente de 1% alors le taux de delit augmente de (2.2172/100) %. (Soit 0.022172%).
+
+
+**Modèle log-log**
+```{r}
+modele_ll <- lm(log(Delit)~log(Population)+log(Immigration)+log(Scolarisation),data=delit)
+summary(modele_ll)
+```
+
+### Qualité d'ajustement ###
+Nous avons un R2 ajusté de 0.7067, c'est à dire que 70,67% de la variance de la variable log(Delit) est expliqué par le modèle, autrement dit par les variables 
+log(Population),log(Immigration), log(Scolarisation) et log(Taux_pauvrete). Le modèle est donc relativement en adéquation avec la variable Y.
+
+### Modèle globalement satisfaisant ###
+On suppose l'hypothèse nulle H0 tel que:
+"Tous les coefficients sont nuls sauf la constante".
+La p-value est strictement inférieur à 2.2e-16 donc bien inférieur au seuil de 5% alors le modèle est globalement satisfaisant.
+
+### Significativité des variables ###
+On test individuellement sur chaque variable explicative de significativité : H0 : "coefficient 
+de la variable est égale à 0". 
+Les variables log(Population),log(Immigration) et log(Scolarisation) ont une p-value inférieure à 5% donc 
+ces variables ont un effet significatif sur le phénomène qu'on explique Y (log(Delit)).
+Seule la variable log(Taux_pauvrete) a une p-value inférieure au seuil de 5% du modèle. Elle n'apporte pas une plus value dans notre modèle dans l'explication de la variable Delit.
+
+### Interprétation des variables ###
+- Si la varibale log(Population) augmente de 1% alors log(Delit) augmente de 0.16%.
+- Si la varibale log(Immigration) augmente de 1% alors log(Delit) augmente de 0.27%.
+- Si la varibale log(Population) augmente de 1% alors log(Delit) augmente de 0.68%.
+
+
+Malgré que les qualités d'ajustement soient assez proche, nous conservons le modèle log-log ayant le R2 ajusté le plus élevé et correspondant au meilleur modèle.
+
+
+# Meilleur modèle?
+```{r}
+# Critère d'information d'Akaike
+AIC(modèle_nn)
+AIC(modèle_nl)
+AIC(modele_ll)
+```
+
+Malgré que les qualités (d'ajustement R2 ajusté) soient assez proches, nous conservons le modèle log-log qui a le R2 ajusté le plus élevé et le critère d'information d'Akaike le plus faible. Le modèle log-log est donc le meilleur modèle. L'AIC du modèle log-log est bien inférieur à celui du modèle de test initiale.
+
+
+# Analyse des résidus
+```{r}
+# Nouveau modèle = modèle conservé
+modele <- modele_ll
+plot(modele)
+```
+
+Au final, nous sommes proches d'une homogénéité parmi nos observations. On ne relève pas de problème d'hétéroscédasticité visuellement. Malgré que la Haute-Corse (2B) et la Haute-Garonne (31) semblent se détacher des autres départements, aucun des deux n'est au-delà des distances de Cook. 
+
+
+*Tests*
+
+***Test de spécification***
+
+##" Test de Ramsey (Specification)
+```{r}
+resettest(modele)
+```
+On effectue un test de spécification. On a pour hypothèse H0: modèle bien spécifié. On a ici une p-value=0.59>0.05. 
+On accepte donc l'hypothèse de H0. Le modèle est bien spécifié.
+
+
+
+***Test de changement de structure***
+
+# Test sur la variable indicatrice Politique
+
+```{r}
+eq_niveau_log2=lm(log(Delit)~log(Population)+log(Immigration)+log(Scolarisation) + (log(Population)+log(Immigration)+log(Scolarisation))^2 + (log(Population)+log(Immigration)+log(Scolarisation))^3 , data=delit)
+scrc = sum(eq_niveau_log2$residuals^2)
+scrc
+
+```
+
+```{r}
+# Sélection des départements de droite
+droite = delit[delit$Politique == 1,]  
+head(droite)
+
+EQ1_Droite = lm(log(Delit)~log(Population)+log(Immigration)+log(Scolarisation) + (log(Population)+log(Immigration)+log(Scolarisation))^2 + (log(Population)+log(Immigration)+log(Scolarisation))^3 , data=droite)
+
+# Résumé statistique des départements ayant la valeur 1 pour la variable Politique
+summary(EQ1_Droite)
+
+scr1 = sum(EQ1_Droite$residuals^2)
+scr1
+```
+
+```{r}
+# Sélection des départements de gauche
+gauche = delit[delit$Politique == 0,]
+head(gauche)
+
+EQ1_Gauche = lm(log(Delit)~log(Population)+log(Immigration)+log(Scolarisation) + (log(Population)+log(Immigration)+log(Scolarisation))^2 + (log(Population)+log(Immigration)+log(Scolarisation))^3 , data=gauche)
+
+# Résumé statistique des départements ayant la valeur 1 pour la variable Politique
+summary(EQ1_Gauche)
+
+scr2 = sum(EQ1_Gauche$residuals^2)
+scr2
+```
+
+### Degrés de liberté
+```{r}
+ddl_n = (eq_niveau_log2$df.residual - (EQ1_Gauche$df.residual + EQ1_Droite$df.residual))
+ddl_n 
+
+ddl_d = EQ1_Gauche$df.residual + EQ1_Droite$df.residual
+ddl_d
+
+```
+On souhaite tester l'hypothèse H0= "Il n'y a pas de différence structurelle entre les départements de Droite et ceux de  Gauche" contre l'hypothèse H1= "Il y a une différence structurelle entre les départements de Droite et ceux de  Gauche". 
+On effectue le test de Chow afin d'y répondre.
+
+
+### Construction d'un test de Fisher
+```{r}
+# On construit un test de Fisher
+FChow = ((scrc-(scr1+scr2))/ddl_n)/((scr1+scr2)/ddl_d)
+FChow
+pvalue = pf(FChow,ddl_n,ddl_d,lower.tail=FALSE)
+pvalue 
+```
+On remarque que la p-value est égale à 0.05876 (>0.05), donc on ne rejette pas H0. Au seuil de 5%, il n'y a pas de différence structurelle entre les départements de droite et ceux de  Gauche.
+
+
+# Changement structurelle par rapport aux départements parisiens
+```{r}
+# Vecteur des départments d'île-de-France
+idf = c("Paris (75)","Seine-et-Marne (77)","Yvelines (78)","Essonne (91)","Hauts-de-Seine (92)", "Seine-Saint-Denis (93)","Val-de-Marne (94)","Val d'Oise (95)")
+
+# Nouvelle variable indiquant l'appartenance ou non à l'île-de-France
+delit["ile_de_France"]= ifelse(is.element(delit2$Département,idf)==TRUE,1,0)
+
+```
+
+Etant donné que les deux échantillons ont des effectifs respectif de 8 (île-de-France) et 88 (hors île-de-France) nous allons évaluer le changement de structure par effet croisé (équivalence du test de Chow).
+
+
+```{r}
+delit$idf <- factor(delit$ile_de_France, labels= c(0,1))
+delit$idf <- as.numeric(delit$idf)
+
+delit$idf_Pop=log(delit[,"Population"])*delit[,"ile_de_France"]
+
+delit$idf_Scolar=log(delit[,"Scolarisation"])*delit[,"ile_de_France"]
+
+delit$idf_Immigra <- log(delit[,"Immigration"])*delit[,"ile_de_France"]
+
+eq_niveau_log2_2<- lm(log(Delit)~log(Population)+log(Immigration)+log(Scolarisation) + (log(Population)+log(Immigration)+log(Scolarisation))^2 + (log(Population)+log(Immigration)+log(Scolarisation))^3  + idf_Pop +  idf_Scolar + idf_Immigra  + ( idf_Pop +  idf_Scolar + idf_Immigra)^2 + (idf_Pop +  idf_Scolar + idf_Immigra)^3, data=delit)
+  
+anova(eq_niveau_log2,eq_niveau_log2_2)
+```
+
+Nous avons une p-value de 0.5106 (>0.05), donc nous ne rejettons pas l'hypothèse nulle. On conclut qu'il n'y pas de changement de structure entre les départements d'île-de-France et les départements de province.
+
+
+***Test autocorrélation***
+# Tests de Durbin Watson (autocorrélation)
+```{r}
+# On test H0:"Il n'y a pas d'autocorrélation" contre H1:"Il y a de l'autocorrélation".
+dwtest(eq_niveau_log2)
+```
+La p-value est égale à 0.03109 (<5%) donc on rejette H0 au niveau 5%. Il y a présence d'autocorrélation.
+
+**Procédure à suivre en cas de présence d'autocorrélation**
+La méthode de Cochrane Orcutt pour corriger les problèmes d'autocorrélation est adéquat.
+
+```{r}
+orc <- cochrane.orcutt(eq_niveau_log2)
+summary(orc)
+dwtest(orc) # Résultat après méthode Cochrane
+```
+On a une p-value égale à 0.449 environ alors on ne rejette pas H0.La méthode de Cochrane a bien supprimée l'autocorrélation sur le modèle. 
+
+En comparant le modèle initial et le modèle corrigé, on remarque que les coefficients, la valeur des statistiques et la qualité d'ajustement ont changés.
+
+
+***Test d'hétéroscédasticité***
+# Tests de White 
+```{r}
+# On teste H0:" Il n'y a pas de problème d'hétéroscédasticité" contre H1:" Il y a un problème d'hétéroscédasticité".
+bptest(eq_niveau_log2, ~ log(Population)+log(Immigration)+log(Scolarisation) + (log(Population)+log(Immigration)+log(Scolarisation))^2 +
+    (log(Population)+log(Immigration)+log(Scolarisation))^3, data=delit)
+```
+La p-value est égale à 0.154, donc supérieure à 5%, alors on ne rejette pas H0. Au niveau 5%, il n'y a pas de problème d'hétéroscédasticité.
+
+
+# Test de Goldfeld Quandt
+```{r}
+# On teste H0:" Il n'y a pas de problème d'hétéroscédasticité" contre H1:" Il y a un problème d'hétéroscédasticité".
+gqtest(eq_niveau_log2, order.by = ~  log(Population), fraction = 6, data=delit) # GoldfeldQuant
+```
+On constate que la p-value (égale à 0.9496) est supérieure à 5%, donc on ne rejette pas H0. Au niveau 5%, il n'y pas de problème d'hétéroscédasticité.
+
