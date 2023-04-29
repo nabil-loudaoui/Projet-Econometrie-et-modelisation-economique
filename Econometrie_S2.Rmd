@@ -1,0 +1,388 @@
+---
+title: "Untitled"
+author: "Yann"
+date: "20/02/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# librairies
+```{r}
+library(remotes)
+# remotes::install_github("ropensci/rnaturalearthhires")
+library(rnaturalearth)
+library(stargazer)
+library(GGally)
+library(tidyverse)
+library(MASS)
+library(ISLR)
+library(pls)
+library(caret)
+library(GGally)
+library(glmnet)
+library(rAmCharts)
+library(car)
+library(AER)
+```
+
+# Chargement données
+```{r}
+getwd()
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+delit <- read.csv("delit.csv", sep=";", dec = ",", header = T, row.names = 1)
+
+
+# Variable indicatrice en facteur
+delit$Politique <- ifelse(delit$Politique == 'gauche', 0, 1)
+delit$Politique <- as.numeric(delit$Politique)
+
+# Première ligne du dataset
+head(delit)
+
+```
+
+
+# Partie 1: Introduction/Rappel
+
+## Visualisation du phénomène à expliquer
+```{r}
+# Shapefile de la France et ses fronti?res d?partementales
+sp::plot(ne_states(geounit = 'france'))
+
+# R?cup?ration des informations du shapefile des d?partements fran?ais
+france <- ne_states(geounit = 'france',returnclass = "sf")
+
+# Trie par ordre croissant des d?partements selon leurs noms dans "france"
+france_order <- france[order(france$name_fr),]
+
+# Import de notre jeu de donn?es sans mettre la colonne des d?partements en attribut de ligne (sans row.names)
+delit2 <- read.csv("delit.csv",sep = ";", header=TRUE, dec = ",", fileEncoding = "latin1")
+
+# Trie par ordre croissant des départements selon leurs noms dans "delits2"
+delit2 <- delit2[order(delit2$Departement),]
+
+# Jointure entre les deux dataframes
+france_delit <- cbind(france_order,delit2)
+
+# Visualisation
+ggplot(data = france_delit)+
+geom_sf(aes(fill=Delit))+
+scale_fill_viridis_c(option = "plasma", trans ="sqrt")+theme_void()+
+ggtitle("Taux de delit en France metropolitaine en 2018")
+```
+## Statistiques descriptives (Boxplot)
+```{r}
+
+# Visualisation variable endogene
+amBoxplot(Delit~Politique, data=delit, main="Politique (0=gauche, 1=droite)", ylab="", xlab="")
+
+# Visualisation variables exogenes
+par(mfrow=c(1,5))
+amBoxplot(delit$Population, xlab="Population")
+amBoxplot(delit$Immigration, xlab="Immigration")
+amBoxplot(delit$Revenu_median, xlab="Revenu_med")
+amBoxplot(delit$Police, xlab="Police")
+amBoxplot(delit$Taux_chomage, xlab="Chomage")
+
+par(mfrow=c(1,4))
+amBoxplot(delit$Urbanisation, xlab="Urbanisation")
+amBoxplot(delit$Scolarisation, xlab="Scolarisation")
+amBoxplot(delit$Densite_pop, xlab="Densite_pop")
+amBoxplot(delit$Taux_pauvrete, xlab="Taux_pauvrete")
+
+# Determination des individus atypiques
+## Exemple avec la variable Delit 
+vec = which(delit$Delit > quantile(delit$Delit, 0.75) + 1.5 * IQR(delit$Delit) | delit$Delit < quantile(delit$Delit, 0.25) - 1.5 * IQR(delit$Delit))
+row.names(delit[vec,])
+
+```
+
+## Corrélation
+```{r}
+# Corrélogramme 
+ggcorr(delit, method = c("everything", "pearson"),low = "#F21A00",mid = "#EEEEEE",high = "#3B9AB2", hjust=0.8, nbreaks = 8, label = TRUE, label_round = 1)
+
+```
+
+
+# Partie 2: Etude de la multicolinéarité
+
+La multicolinéarité peu engendré une non fiabilité des coefficients de régression.
+Précèdemment pour remédier à la multicolinéarité nous avions supprimé du modèle les variables fortement corrélés entre elles malgré parfois leurs bonnes corrélation avec l'endogène.
+Cette fois-ci nous transformerons les variables au travers de plusieurs méthodes.
+
+Nous verrons tout d'abord les techniques de Ridge et Lasso basées sur la pénalisation des moindres carrés par pénalités de type L1 pour Lasso et L2 pour Ridge.
+Nous verrons également les techniques de PCR et PLS basées sur la réduction de dimensions des prédicteurs.
+
+Avant d'appliquer les méthodes nous porterons un regard sur le vif des variables.
+
+## VIF
+```{r}
+# Modèle de régression linéaire
+modele <- lm(Delit~., data=delit)
+
+vif(modele)
+
+```
+
+Un bon nombre de variables sont proches d'un vif de 5 voir supérieur à 5 notament les variables Immigration,Taux_pauvrte, X15.29ans et X60.74ans.
+Les méthodes que nous verrons par la suite auront un réelle intérêt au vue des VIF observés.
+
+## Méthodes de réduction de dimensions
+
+### PCR
+```{r}
+set.seed(100)
+pcr_delit <- pcr(Delit~., data=delit, scale=TRUE, jackknife = TRUE, validation="CV", ncomp=12)
+
+# Choix du nombre de composante
+par(mfrow=c(2,2))
+validationplot(pcr_delit,legendpos= "topright")
+validationplot(pcr_delit, val.type="R2")
+validationplot(pcr_delit, val.type="MSEP",legendpos= "topright")
+
+# scale= TRUE, variables centréees réduites ... more explications
+summary(pcr_delit)
+# explvar(pcr_delit)
+
+
+# Jeu apprentissage
+index <- sample(nrow(delit), nrow(delit)*0.7)
+
+train <- delit[index,c("Delit","Population","Densite_pop","Revenu_median","X15.29ans","X60.74ans","Taux_pauvrete","Urbanisation", "Scolarisation" ,"Taux_chomage", "Immigration","Police","Politique")]
+
+test <- delit[-index,c("Population","Densite_pop","Revenu_median","X15.29ans","X60.74ans","Taux_pauvrete","Urbanisation", "Scolarisation" ,"Taux_chomage", "Immigration","Police","Politique")]
+
+y_test <- delit[-index, c("Delit")]
+
+# Prediction
+model <- pcr(Delit~., data=train, scale=TRUE, validation="CV", ncomp=12)
+delit_pred <- predict(model, test, ncomp = 7)
+delit_pred
+
+# calculate prediction RMSEP pour 7 components
+sqrt(mean((delit_pred - y_test)^2))
+
+# Prévision sur l'échantillon test
+prevision <- predict(model, newdata=test, ncomp=7)
+prevision
+
+# RMSEP pour toutes les composantes
+test_T <- delit[-index,c("Population","Densite_pop","Revenu_median","X15.29ans","X60.74ans","Taux_pauvrete","Urbanisation", "Scolarisation" ,"Taux_chomage", "Immigration","Police","Politique", "Delit")]
+
+RMSEP(model, newdata = test_T)
+
+
+```
+Pour 7 composantes:
+
+R2 de 65.69 pour 7 composantes
+Estimation du RMSEP 0.8638
+
+Avec un test en ayant pris 70% du jeu de données en comme jeu d'apprentissage et un choix aléatoire (toujours pour 7 composantes), nous calculons les prévisions et obtenont un RMSEP de 0.7890. Cependant, il ne repose que sur une expérience, il faudrait recommencer avec plusieurs fois avec différent jeu d'apprentissage et moyenner afin d'être plus précis. Il faudra également trouver la partition optimale d'échantillonage.
+
+
+### PLS
+```{r }
+set.seed(100)
+
+pls_delit <- plsr(Delit~., data=delit, scale=TRUE, jackknife = TRUE,validation="CV")
+
+# Choix lambda optimale
+par(mfrow=c(2,2))
+validationplot(pls_delit,legendpos= "topright")
+validationplot(pls_delit, val.type="R2")
+validationplot(pls_delit, val.type="MSEP",legendpos= "topright")
+
+summary(pls_delit)
+
+# choix de 2 composantes
+coefficients(pls_delit, ncomp=2)
+
+# pour predict = idem que pcr
+coefplot(pls_delit, ncomp=2, se.whiskers = TRUE, labels = prednames(pls_delit), cex.axis = 0.5)
+
+
+model_pls <- plsr(Delit~., data=train, scale=TRUE, validation="CV", ncomp=12)
+delit_pred_pls <- predict(model_pls, test, ncomp = 2)
+delit_pred_pls
+
+# calculate prediction RMSEP pour 7 components
+sqrt(mean((delit_pred_pls - y_test)^2))
+
+# Prévision sur l'échantillon test
+prevision_pls <- predict(model_pls, newdata=test, ncomp=2)
+prevision_pls
+
+# RMSEP pour toutes les composantes
+test_T_pls <- delit[-index,c("Population","Densite_pop","Revenu_median","X15.29ans","X60.74ans","Taux_pauvrete","Urbanisation", "Scolarisation" ,"Taux_chomage", "Immigration","Police","Politique", "Delit")]
+
+RMSEP(model_pls, newdata = test_T_pls) # Avec notre échantillon regard sur le RMSEP en fonction du nombre de composante
+
+```
+
+RMSEP ==> 0.82 (Même résultat avec le test)
+R2 ==> 65.46
+
+
+##  Méthodes de régularisations
+La valeur de alpha contrôlera la régularisation du modèle et prendra des valeurs entre 0 et 1.
+
+
+### Ridge
+```{r}
+
+Y <-as.matrix(delit[,1]) # variable endogène
+X <-as.matrix(delit[,2:12]) # variables exogènes
+
+# Recherche et Determination de lambda par validation croisé
+set.seed(100)
+
+cv.ridge <-cv.glmnet(X,Y, family ="gaussian", alpha =0, type.measure="mse",lambda =exp(seq(-5,10,length=1000)))
+plot(cv.ridge)
+
+mse_ridge <- min(cv.ridge$cvm)
+mse_ridge
+
+bestlambda<-cv.ridge$lambda.min
+bestlambda
+
+# Prevision
+y_predic<-predict(cv.ridge$glmnet.fit,newx = X,s=cv.ridge$lambda.min, type = "response")
+y_predic
+
+RMSEP_ridge <-sqrt(min(cv.ridge$cvm))
+RMSEP_ridge
+
+# Qualité d'ajustement
+SST <- sum((Y-mean(Y))^2)
+SSE <- sum((y_predic - Y)^2)
+rsquare <- 1 - SSE/SST
+rsquare
+
+
+```
+
+Interprétation des plots
+R2 = 0.6997791 ==> qualité d'ajustement du modèle
+RMSEP = 0.8088936 ==> qualité de la prédiction du modèle
+MSE = 0.6543088
+
+
+### Lasso
+```{r}
+set.seed(100)
+###détermination de lambda par validation croisée
+
+
+# cv.lasso <- cv.glmnet(X, Y, family ="gaussian", alpha =1, type.measure="mse",lambda = exp(seq(0,5,length=100)))
+# plot(cv.lasso)
+#On observe que la décroissance de l’erreur de prédiction n’est pas assez prononcée, du coup, on élargi l’intervalle de lambda
+
+cv.lasso <- cv.glmnet(X, Y, family ="gaussian", alpha =1, type.measure="mse",lambda = exp(seq(-5,10,length=100)))
+plot(cv.lasso)
+mse_lasso <- min(cv.lasso$cvm)
+mse_lasso
+
+#choisit la valeur de lambda qui minimise l'erreur quadratique moyenne estimée par validation croisée
+bestlam<- cv.lasso$lambda.min
+bestlam 
+
+
+####previsions 
+y.pred <- predict(cv.lasso$glmnet.fit, newx=X, s= cv.lasso$lambda.min, type = "response")
+cv.lasso$glmnet.fit
+
+RMSEP_lasso <- sqrt(min(cv.lasso$cvm))
+RMSEP_lasso
+
+
+###qualité ajustement
+SST <- sum((Y-mean(Y))^2)
+SSE <- sum((y.pred - Y)^2)
+rsquare <- 1 - SSE/SST
+rsquare
+
+```
+R2 = 0.6928804
+RMSEP = 0.8137986
+MSE = 0.6622681
+
+
+# Elastic Net
+
+```{r}
+###détermination de lambda par validation croisée
+set.seed(100)
+
+cv.elastic <- cv.glmnet(X, Y, family ="gaussian", alpha =0.5, type.measure="mse",lambda = exp(seq(-5,10,length=100)))
+plot(cv.elastic)
+
+#choisit la valeur de lambda qui minimise l'erreur quadratique moyenne estimée par validation croisée
+bestlam<- cv.elastic$lambda.min
+bestlam 
+
+
+####previsions 
+y.pred <- predict(cv.elastic$glmnet.fit, newx=X, s= cv.elastic$lambda.min, type = "response")
+# cv.elastic$glmnet.fit
+
+RMSEP_elastic <- sqrt(min(cv.elastic$cvm))
+RMSEP_elastic
+
+
+###qualité ajustement
+SST <- sum((Y-mean(Y))^2)
+SSE <- sum((y.pred - Y)^2)
+rsquare <- 1 - SSE/SST
+rsquare
+```
+
+RMSEP = 0.8088
+R2 = 0.6939646
+
+# Endogénéité
+
+```{r}
+
+
+# Résidus du modèles
+residus <- modele$residuals
+# residus
+
+# Test de corrélation de Pearson
+cor.test(residus, delit$Population)
+cor.test(residus, delit$Densite_pop)
+cor.test(residus, delit$Revenu_median)
+cor.test(residus, delit$X15.29ans)
+cor.test(residus, delit$X60.74ans)
+cor.test(residus, delit$Taux_chomage)
+cor.test(residus, delit$Taux_pauvrete)
+cor.test(residus, delit$Urbanisation)
+cor.test(residus, delit$Scolarisation)
+cor.test(residus, delit$Immigration)
+cor.test(residus, delit$Police)
+```
+
+
+Aucune variable n'est significative !
+
+```{r}
+# Etape 1 : Choisissez une variable instrumentale
+instrument <- delit$Densite_pop
+
+# Etape 2 : Estimation du premier modèle
+ivmodel <- lm(delit$Immigration ~ instrument)
+residus_iv <- residuals(ivmodel)
+
+# Etape 3 : Estimation du second modèle IV
+ivmodel2 <- lm(delit$Delit ~ delit$Immigration + residus_iv)
+
+# Etape 4 : Test de la validité de l'instrument
+waldtest(ivmodel2, ~residus_iv)
+```
+
+
